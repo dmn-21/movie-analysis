@@ -1,5 +1,9 @@
 # Movie Recommendation Analysis using Apriori and ECLAT
 
+## Live Project
+
+[View the MBA Movie Analysis Report](https://dmn-21.github.io/movie-analysis/)
+
 ## Overview
 
 This project presents an association rule mining analysis of movie recommendation patterns using the Apriori and ECLAT algorithms in R. The analysis explores viewer behavior and discovers relationships between movies frequently watched together.
