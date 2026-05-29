@@ -1,0 +1,792 @@
+---
+title: "MBA Movie Analysis"
+author: "Daniel Nikolov"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    code-fold: true
+execute:
+  warning: false
+  message: false
+---
+
+# **Project:** MBA Movie Analysis
+
+------------------------------------------------------------------------
+
+## **1. Introduction**
+
+In recent years, the rapid growth of digital streaming platforms and online movie services has significantly changed consumer viewing behavior. Understanding relationships between watched movies and identifying hidden viewing patterns has become increasingly important for recommendation systems, customer retention, and marketing strategies.
+
+This report presents an analytical study of movie consumption behavior using association rule mining techniques in R. The main objective is to discover meaningful relationships between movie titles frequently watched together by users. The analysis is based on transactional movie data transformed into a format suitable for market basket analysis.
+
+To achieve the objectives of the study, the Apriori algorithm from the arules package is applied in order to extract frequent itemsets and association rules. Different combinations of support, confidence, and lift thresholds are evaluated to identify the most significant rules. In addition, several visualizations and summary statistics are used to interpret the extracted patterns and measure the strength of associations between movies.
+
+Special attention is given to the movie “Pulp Fiction” by Quentin Tarantino in order to examine factors influencing viewer interest and to identify other movies commonly associated with it. The results of the analysis provide valuable insights into consumer preferences and demonstrate how association rule mining techniques can support recommendation systems and marketing decision-making processes.
+
+```{r}
+library(tidyverse)
+library(arules)
+library(arulesViz)
+library(DT)
+library(ggplot2)
+```
+
+```{r}
+movie_subset <- read.csv("Movie_subset.csv")
+```
+
+------------------------------------------------------------------------
+
+## **2. Data Exploration**
+
+The Data Exploration phase focuses on understanding the structure, quality, and characteristics of the movie dataset before applying association rule mining techniques. During this stage, the dataset is examined using descriptive statistics, frequency distributions, and visualizations in order to identify viewing patterns and relationships between movies.
+
+Key exploratory tasks include analyzing the number of users and movies, examining the distribution of watched movies per user, and identifying the most and least frequently watched movies. Graphical visualizations such as bar charts, frequency plots, and transaction matrix images are used to better understand the data structure and sparsity.
+
+This phase is essential because it provides insights into the behavior of users and helps determine appropriate thresholds for support, confidence, and lift in the subsequent market basket analysis.
+
+```{r}
+glimpse(movie_subset)
+```
+
+```{r}
+cat("Number of users:", n_distinct(movie_subset$userId), "\n")
+cat("Number of movies:", n_distinct(movie_subset$movieId), "\n")
+```
+
+```{r}
+user_movie_counts <- movie_subset %>%
+  group_by(userId) %>%
+  summarise(
+    nb_movies = n_distinct(movieId),
+    .groups = "drop"
+  )
+
+head(user_movie_counts)
+```
+
+```{r}
+ggplot(user_movie_counts, aes(x = nb_movies)) +
+  geom_bar() +
+  labs(
+    title = "Distribution of the Number of Watched Movies",
+    x = "Number of Watched Movies",
+    y = "Number of Users"
+  )
+```
+
+```{r}
+user_movie_counts %>%
+  summarise(
+    avg_movies = mean(nb_movies)
+  )
+```
+
+```{r}
+user_movie_counts %>%
+  summarise(
+    median_movies = median(nb_movies)
+  )
+```
+
+------------------------------------------------------------------------
+
+## **3. Data Transformation**
+
+The Data Transformation phase converts the original movie dataset into a transactional format suitable for market basket analysis. During this process, movies watched by each user are grouped together to form transactions, where each transaction represents the set of movies associated with a single user.
+
+The transformed data is then converted into a transaction object using the arules package in R. Additional preprocessing steps such as removing duplicate movie entries and handling empty transactions are performed to improve data quality and ensure compatibility with association rule mining algorithms.
+
+This transformation is necessary because algorithms such as Apriori and ECLAT require transactional input data in order to identify frequent itemsets and discover meaningful associations between movies.
+
+```{r}
+movie_subset <- movie_subset[!is.na(movie_subset$title), ]
+movie_subset$title <- as.character(movie_subset$title)
+
+movie_subset$title <- iconv(movie_subset$title, from = "", to = "ASCII//TRANSLIT")
+
+data_list <- split(movie_subset$title, movie_subset$userId)
+
+data_list_clean <- lapply(data_list, function(x) sort(unique(x)))
+
+data_list_clean <- data_list_clean[lengths(data_list_clean) > 0]
+
+stopifnot(all(sapply(data_list_clean, function(x) is.character(x) && is.atomic(x))))
+
+movie_trx <- as(data_list_clean, "transactions")
+```
+
+```{r}
+summary(movie_trx)
+```
+
+The dataset contains 100 users and 4,393 movies in transaction format. The most frequently watched movies are *The Matrix*, *American Beauty*, and *Fight Club*. The data is sparse, meaning that each user watched only a small portion of all available movies, making the dataset suitable for association rule mining.
+
+```{r}
+image(movie_trx[1:100,1:100])
+```
+
+```{r}
+binary_matrix <- as(movie_trx, "matrix")
+
+density <- sum(binary_matrix) / (nrow(binary_matrix) * ncol(binary_matrix))
+
+cat("Density of the item matrix:", density, "\n")
+```
+
+## **4. Frequency Diagrams**
+
+#### The visualization shows the most frequently watched movies in the dataset. *The Matrix*, *American Beauty*, and *Fight Club* are among the most popular titles.
+
+```{r}
+itemFrequencyPlot(movie_trx,
+                  type = "absolute",
+                  topN = 10,
+                  horiz = TRUE,
+                  main = 'Absolute frequency of movies')
+```
+
+- 
+
+#### The plots compare the relative and absolute frequencies of the most frequently watched movies. *The Matrix* and *The Lord of the Rings: The Fellowship of the Ring* appear among the most common titles in the dataset.
+
+```{r}
+par(mfrow=c(2,1))
+
+itemFrequencyPlot(movie_trx,
+                  type = "relative",
+                  topN = 10,
+                  horiz = TRUE,
+                  main = 'Relative item frequency')
+
+itemFrequencyPlot(movie_trx,
+                  type = "absolute",
+                  topN = 10,
+                  horiz = TRUE,
+                  main = 'Absolute item frequency')
+```
+
+```{r}
+par(mfrow=c(1,1))
+```
+
+\-
+
+#### The visualization presents the least popular movies in the dataset. These titles were watched by very few users and therefore have the lowest frequency in the transaction data.
+
+```{r}
+par(mar=c(2,18,2,2), mfrow=c(1,1))
+
+barplot(sort(table(unlist(LIST(movie_trx))))[1:10],
+        horiz = TRUE,
+        las = 1,
+        main = 'Least popular items') 
+```
+
+------------------------------------------------------------------------
+
+## **5. Association Rules Mining**
+
+Association Rule Mining is a data mining technique used to discover hidden relationships and patterns between items within transactional datasets. In this project, the method is applied to movie viewing behavior in order to identify groups of movies that are frequently watched together by users.
+
+The analysis is performed using the Apriori algorithm from the `arules` package in R. The transactional dataset consists of users as transactions and movies as items. The algorithm identifies frequent itemsets based on a minimum support threshold and then generates association rules according to specified confidence levels.
+
+Several important quality measures are used to evaluate the extracted rules:
+
+- **Support** measures how frequently a movie combination appears in the dataset.
+
+- **Confidence** indicates the probability that users who watched one movie also watched another movie.
+
+- **Lift** evaluates the strength of the relationship between movies compared to random co-occurrence.
+
+Different support and confidence thresholds are tested in order to identify strong and meaningful rules while avoiding excessive computational complexity. Redundant rules are also removed to improve the interpretability of the results.
+
+The extracted rules provide valuable insights into user preferences and movie consumption patterns. These findings can be used to support recommendation systems, improve personalized suggestions, and assist marketing strategies in streaming and entertainment platforms.
+
+```{r}
+itemsets_freq2 <- apriori(
+  movie_trx,
+  parameter = list(
+    supp = 0.2,
+    minlen = 2,
+    maxlen = 3,
+    target = "frequent"
+  )
+)
+```
+
+\-
+
+#### The extracted frequent itemsets show groups of movies that are often watched together by users. Combinations such as *The Matrix* with *The Silence of the Lambs* and *American Beauty* with *Pulp Fiction* have some of the highest support values in the dataset.
+
+```{r}
+inspect(head(sort(itemsets_freq2, by = "support")))
+```
+
+```{r}
+rules <- apriori(
+  movie_trx,
+  parameter = list(
+    supp = 0.2,
+    conf = 0.5,
+    minlen = 2,
+    maxlen = 3,
+    target = "rules"
+  )
+)
+```
+
+\-
+
+#### The extracted association rules reveal strong relationships between several movies. Some rules have a confidence value equal to 1, indicating that users who watched certain movies also consistently watched the associated movie. High lift values suggest meaningful viewing patterns rather than random co-occurrences.
+
+```{r}
+inspect(head(sort(rules, by = "confidence")))
+```
+
+```{r}
+confidenceLevels <- seq(from = 0.1, to = 0.9, by = 0.1)
+
+rules_sup005 <- NULL
+
+for (i in 1:length(confidenceLevels)) {
+  
+  rules_sup005[i] <- length(
+    apriori(
+      movie_trx,
+      parameter = list(
+        supp = 0.2,
+        conf = confidenceLevels[i],
+        minlen = 2,
+        maxlen = 3,
+        target = "rules"
+      )
+    )
+  )
+}
+```
+
+\-
+
+#### The number of association rules decreases as the confidence level increases.
+
+```{r}
+qplot(
+  confidenceLevels,
+  rules_sup005,
+  geom = c("point", "line"),
+  xlab = "Confidence level",
+  ylab = "Number of rules found"
+) +
+  theme_bw()
+```
+
+\-
+
+#### The extracted rules reveal strong associations between *The Lord of the Rings: The Fellowship of the Ring* and *The Lord of the Rings: The Two Towers*. Many rules have confidence values close to or equal to 1, indicating very consistent viewing behavior among users.
+
+```{r}
+inspect(
+  subset(
+    rules,
+    subset =
+      items %ain% c("Lord of the Rings: The Fellowship of the Ring, The",
+                    "Lord of the Rings: The Two Towers, The") &
+      confidence > .95
+  )
+)
+```
+
+\-
+
+#### The filtered rules show very strong associations between *The Lord of the Rings: The Fellowship of the Ring* and *The Lord of the Rings: The Two Towers*. Most rules have confidence values equal to 1, indicating that users who watched one of these movies almost always watched the other as well.
+
+```{r}
+inspect(
+  subset(
+    rules,
+    subset = items %ain% c(
+      "Lord of the Rings: The Fellowship of the Ring, The",
+      "Lord of the Rings: The Two Towers, The"
+    ) & confidence > .95
+  )
+)
+```
+
+\-
+
+#### The filtered rules demonstrate strong relationships with *The Lord of the Rings: The Fellowship of the Ring*. High confidence and lift values indicate that users who watched related fantasy and action movies were also very likely to watch this title.
+
+```{r}
+inspect(
+  subset(
+    rules,
+    subset = rhs %ain% "Lord of the Rings: The Fellowship of the Ring, The" &
+      lift > 2 &
+      confidence > 0.95
+  )
+)
+```
+
+\-
+
+#### The Apriori algorithm identified the most frequent movies in the dataset based on a minimum support threshold of 0.4. *The Matrix*, *American Beauty*, and *Fight Club* appear among the most frequently watched titles, indicating strong user interest and repeated viewing patterns.
+
+```{r}
+itemsets = apriori(movie_trx,
+                   parameter = list(support = 0.4,
+                                    target = 'frequent'
+                   ))
+
+inspect(sort(itemsets, by='support', decreasing = T)[1:5])
+```
+
+\-
+
+#### The Apriori algorithm extracted 115 frequent itemsets using a minimum support threshold of 0.3. The results show that combinations such as *The Matrix* with *The Silence of the Lambs* and *American Beauty* with *Pulp Fiction* are among the most frequent movie pairs in the dataset.
+
+```{r}
+itemsets_minlen2 = apriori(movie_trx, parameter = 
+                             list(support = 0.3,
+                                  minlen = 2,
+                                  target = 'frequent'
+                             ))
+
+inspect(sort(itemsets_minlen2, 
+             by='support', decreasing = T)[1:5])
+```
+
+\-
+
+#### The Apriori algorithm identified additional frequent movie combinations with a support value of 0.3. Pairs such as *The Matrix* with *Minority Report* and *Braveheart* with *Jurassic Park* appeared frequently among users, indicating common viewing preferences.
+
+```{r}
+itemsets_minlen2 = apriori(movie_trx, parameter = 
+                             list(support = 0.3,
+                                  minlen = 2,
+                                  target = 'frequent'
+                             ))
+
+inspect(sort(itemsets_minlen2, 
+             by='support', decreasing = F)[1:5])
+```
+
+```{r}
+confidenceLevels <- seq(from=0.95, to=0.5, by=-0.05)
+
+rules_sup04 = NULL
+
+for (i in 1:length(confidenceLevels)) {
+  rules_sup04[i] = 
+    length(apriori(movie_trx,
+                   parameter=list(sup=0.4, 
+                                  conf=confidenceLevels[i],
+                                  target="rules")))
+}
+```
+
+\-
+
+#### The graph shows that the number of discovered rules decreases as the confidence level increases. At higher confidence thresholds, fewer but more reliable association rules are generated.
+
+```{r}
+qplot(confidenceLevels, rules_sup04, 
+      geom=c("point", "line"),xlab="Confidence level",
+      ylab="Number of discovered rules", 
+      main="Apriori with a support level of 40%") +
+  theme_bw()
+```
+
+\-
+
+#### The visualization shows that increasing the confidence threshold reduces the number of extracted association rules. In addition, the support threshold of 40% generates significantly fewer rules compared to the 30% threshold, indicating stricter filtering of frequent movie combinations.
+
+```{r}
+confidenceLevels = seq(from=0.95, to=0.5, by=-0.05)
+
+rules_sup03 = NULL
+
+for (i in 1:length(confidenceLevels)) {
+  rules_sup03[i] = 
+    length(apriori(movie_trx,
+                   parameter=list(sup=0.3, 
+                                  conf=confidenceLevels[i],
+                                  target="rules")))
+}
+
+nb_rules <-  data.frame(rules_sup04, rules_sup03, confidenceLevels)
+
+ggplot(data=nb_rules, aes(x=confidenceLevels)) +
+  
+  geom_line(aes(y=rules_sup04, colour="Support threshold >40%")) + 
+  geom_point(aes(y=rules_sup04,colour="Support threshold >40%")) +
+  
+  geom_line(aes(y=rules_sup03, colour="Support threshold >30%")) +
+  geom_point(aes(y=rules_sup03,colour="Support threshold >30%")) + 
+  
+  theme_bw() + ylab("") +
+  ggtitle("Number of rules extracted using Apriori")
+```
+
+```{r}
+rules_movies <- apriori(movie_trx,
+                        parameter = list(supp = 0.3,
+                                         conf = 0.9,
+                                         minlen = 2, 
+                                         target = "rules"))
+
+summary(rules_movies)
+```
+
+\-
+
+#### The rules sorted by lift reveal strong relationships between movie preferences. The highest lift values are observed between *The Lord of the Rings* movies, showing that users who watched one part of the trilogy are highly likely to watch the others as well. Some rules also include *The Matrix*, indicating a strong association between popular fantasy and science fiction movies.
+
+```{r}
+inspect(head(sort(rules_movies, by="lift")))
+```
+
+\-
+
+#### The extracted association rules show very strong relationships between *The Lord of the Rings* movies. Most rules have confidence close to or equal to 1, meaning that users who watched one movie from the trilogy almost always watched the others. High lift values above 2 also indicate strong positive associations between these movies.
+
+```{r}
+rules_movies <- apriori(movie_trx,
+                        parameter = list(supp = 0.3,
+                                         conf = 0.9,
+                                         minlen = 2, 
+                                         target = "rules"))
+
+summary(rules_movies)
+
+rules_red <- is.redundant(rules_movies)
+rules.pruned <- rules_movies[!rules_red]
+
+inspect(head(sort(rules.pruned, by="confidence")))
+```
+
+```{r}
+num_redundant <- sum(rules_red)
+num_redundant
+```
+
+------------------------------------------------------------------------
+
+## **6. Visualization of Transactions and Rules**
+
+#### Interactive table visualization of the extracted association rules and their metrics.
+
+```{r}
+inspectDT(rules)
+```
+
+\-
+
+#### Scatter plot showing the relationship between support, confidence, and lift of the association rules.
+
+```{r}
+plot(rules, method = "scatterplot", engine = "html")
+```
+
+\-
+
+#### Network graph visualization of the association rules between movies.
+
+```{r}
+plot(rules, method = "graph", engine = "html")
+```
+
+\-
+
+#### The top 10 rules by confidence show very strong movie associations. Many rules have confidence equal to 1, meaning that users who watched certain movies also watched the related movies every time. The strongest relationships are mainly between *The Lord of the Rings* movies, as well as links with *The Matrix* and *Batman Begins*.
+
+```{r}
+top10_rules_Movies <- head(sort(rules, by = "confidence"), 10)
+inspect(top10_rules_Movies)
+```
+
+\-
+
+#### Network graph of the top 10 association rules between movies based on confidence values.
+
+```{r}
+plot(top10_rules_Movies,
+     method = "graph",
+     engine = "html")
+```
+
+```{r}
+rules <- apriori(
+  movie_trx,
+  parameter = list(
+    supp = 0.05,
+    conf = 0.8,
+    minlen = 2,
+    maxlen = 3
+  )
+)
+```
+
+\-
+
+#### The analysis found one strong rule leading to *Pulp Fiction*. Users who watched *Fight Club* and *The Silence of the Lambs* also watched *Pulp Fiction* with a confidence of about 92%, showing a strong relationship between these movies.
+
+```{r}
+pulp_fiction_rules <- apriori(movie_trx,
+                              parameter = list(supp = 0.3,
+                                               conf = 0.9,
+                                               minlen = 2),
+                              appearance = list(rhs = "Pulp Fiction"))
+inspect(pulp_fiction_rules)
+```
+
+```{r}
+rules_pulp_rhs <- subset(rules_movies, rhs %in% "Pulp Fiction")
+
+length(rules_pulp_rhs)
+```
+
+\-
+
+#### Matrix visualization of association rules, where darker colors indicate higher confidence values between movie associations.
+
+```{r}
+plot(rules_movies, method = "matrix",
+     shading ="confidence",
+     engine = "html"
+)
+```
+
+```{r}
+plot(rules_movies, 
+     method = "grouped",
+     measure = "lift",
+     shading = "confidence")
+```
+
+```{r}
+plot(rules_movies, 
+     method = "paracoord", 
+     shading = "confidence")
+```
+
+\-
+
+#### Interactive network graph showing relationships between movies and association rules generated by the Apriori algorithm.
+
+```{r}
+plot(rules_movies,
+     method = "graph",
+     engine = "htmlwidget")
+```
+
+```{r}
+top10_rules_movies <- head(sort(rules_movies,
+                                by = "confidence"), 10)
+```
+
+\-
+
+#### Network graph of the top 10 association rules, highlighting strong relationships between “The Lord of the Rings”, “Matrix”, and other popular movies.
+
+```{r}
+plot(top10_rules_movies,
+     method = "graph",engine = "htmlwidget")
+```
+
+\-
+
+#### Top 10 association rules with the highest confidence values, showing very strong relationships between “The Lord of the Rings” movies and “Matrix”.
+
+```{r}
+inspect(top10_rules_movies)
+```
+
+------------------------------------------------------------------------
+
+## **7. How Can We Maximize the Benefits of Market Basket Analysis?**
+
+#### Association rules with “Pulp Fiction” as the target movie, showing strong links with “Trainspotting”, “The Big Lebowski”, and “Reservoir Dogs”.
+
+```{r}
+pulp_fiction_rules_rhs <- apriori(
+  movie_trx,
+  parameter = list(
+    supp = 0.2,
+    conf = 0.9,
+    minlen = 2,
+    maxlen = 2,
+    target = "rules"
+  ),
+  appearance = list(
+    default = "lhs",
+    rhs = "Pulp Fiction"
+  )
+)
+
+inspect(pulp_fiction_rules_rhs)
+```
+
+\-
+
+#### Rules sorted by lift for “Pulp Fiction”, showing the strongest associations with “Trainspotting”, “The Big Lebowski”, and “Reservoir Dogs”.
+
+```{r}
+inspect(head(sort(pulp_fiction_rules_rhs, by = "lift")))
+```
+
+```{r}
+pulp_fiction_rules_lhs <- apriori(
+  movie_trx,
+  parameter = list(
+    supp = 0.2,
+    conf = 0.9,
+    minlen = 2,
+    maxlen = 2,
+    target = "rules"
+  ),
+  appearance = list(
+    default = "rhs",
+    lhs = "Pulp Fiction"
+  )
+)
+
+inspect(pulp_fiction_rules_lhs)
+```
+
+\-
+
+#### Apriori algorithm execution with support 20% and confidence 90%, showing that no association rules satisfied the selected conditions.
+
+```{r}
+pulpfiction_rules_rhs <- apriori(
+  movie_trx,
+  parameter = list(
+    supp = 0.2,
+    conf = 0.5,
+    minlen = 2,
+    maxlen = 2,
+    target = "rules"
+  ),
+  appearance = list(
+    default = "lhs",
+    rhs = "Pulp Fiction"
+  )
+)
+
+inspect(head(pulpfiction_rules_rhs))
+```
+
+\-
+
+#### Top association rules for “Pulp Fiction” sorted by lift, highlighting strong relationships with movies such as “Trainspotting”, “Reservoir Dogs”, and “Goodfellas”.
+
+```{r}
+inspect(head(sort(pulpfiction_rules_rhs, by="lift"), 10))
+```
+
+\-
+
+#### Association rules sorted by confidence, showing that users who watched “Trainspotting”, “The Big Lebowski”, or “Reservoir Dogs” are highly likely to also watch “Pulp Fiction”.
+
+```{r}
+inspect(head(sort(pulpfiction_rules_rhs, by = "confidence")))
+```
+
+```{r}
+pulpfiction_rules_lhs <- apriori(
+  movie_trx,
+  parameter = list(
+    supp = 0.2,
+    conf = 0.5,
+    minlen = 2,
+    maxlen = 2,
+    target = "rules"
+  ),
+  appearance = list(
+    default = "rhs",
+    lhs = "Pulp Fiction"
+  )
+)
+
+summary(pulpfiction_rules_lhs)
+```
+
+\-
+
+#### Association rules with “Pulp Fiction” on the left-hand side, showing related movies such as “Fargo”, “Goodfellas”, and “The Usual Suspects”.
+
+```{r}
+inspect(head(pulpfiction_rules_lhs))
+```
+
+\-
+
+#### Apriori rules generated with support 20% and confidence 50%, identifying 40 association rules related to “Pulp Fiction” and similar movies.
+
+```{r}
+pulpfiction_rules_lhs <- apriori(
+  movie_trx,
+  parameter = list(
+    supp = 0.2,
+    conf = 0.5,
+    minlen = 2,
+    maxlen = 2,
+    target = "rules"
+  ),
+  appearance = list(
+    default = "rhs",
+    lhs = "Pulp Fiction"
+  )
+)
+
+inspect(head(pulpfiction_rules_lhs))
+```
+
+------------------------------------------------------------------------
+
+## **8. Equivalence Class Transformation Algorithm (ECLAT)**
+
+#### ECLAT algorithm discovered 152 frequent itemsets with a minimum support threshold of 30%. The most frequent movies were “The Matrix” (60%), “American Beauty” (57%), and “Fight Club” (54%), showing the strongest occurrence in the dataset.
+
+```{r}
+frequent_items_eclat <- eclat(
+  movie_trx,
+  parameter = list(
+    supp = 0.3,
+    maxlen = 2
+  )
+)
+```
+
+```{r}
+inspect(sort(frequent_items_eclat, by = "support")[1:10])
+```
+
+------------------------------------------------------------------------
+
+## Influence of “Pulp Fiction” on Viewer Preferences and Movie Selection
+
+The association rule analysis shows that audience interest in Quentin Tarantino’s movie “Pulp Fiction” was mainly influenced by viewers’ preferences for movies with similar crime, psychological, and cult themes. The strongest relationships were identified with the movies “Trainspotting”, “The Big Lebowski”, and “Reservoir Dogs”, which achieved high confidence and lift values. This indicates that viewers who enjoyed these movies were highly likely to also choose “Pulp Fiction”.
+
+The results also demonstrate that watching “Pulp Fiction” influenced the selection of other movies. After watching it, viewers most frequently showed interest in movies such as “Fargo”, “Goodfellas”, “Ocean’s Eleven”, “The Usual Suspects”, and “The Lord of the Rings: The Return of the King”. These findings suggest that “Pulp Fiction” affects audience preferences toward cult, crime, and psychologically engaging movies with strong storytelling and memorable characters.
+
+------------------------------------------------------------------------
+
+## Conclusion
+
+This study demonstrated the successful application of association rule mining techniques, including Apriori and ECLAT, for analyzing movie recommendation patterns and viewer preferences. The extracted rules revealed strong relationships between movies frequently watched together and highlighted important viewing trends within the dataset.
+
+The analysis showed that “Pulp Fiction” has strong associations with movies such as “Trainspotting”, “Reservoir Dogs”, and “The Big Lebowski”, indicating that viewers interested in cult and crime-related movies are highly likely to select “Pulp Fiction”. In addition, the results demonstrated that watching “Pulp Fiction” influences the selection of other movies, including “Fargo”, “Goodfellas”, and “The Usual Suspects”.
+
+The visualization methods and association metrics such as support, confidence, and lift provided valuable insights into audience behavior and movie selection patterns. Overall, the results confirm that association rule mining is an effective approach for discovering hidden relationships in movie recommendation datasets and can support decision-making in recommendation systems and entertainment analytics.
+
+------------------------------------------------------------------------
+
+## Use of Artificial Intelligence Tools
+
+During the development of this project, artificial intelligence tools, including ChatGPT, were used as supportive tools for organizing the workflow and improving the documentation process. The tool was mainly used for guidance in R programming, structuring the report, and generating short descriptions for visualizations and results.
+
+All data analysis, parameter selection, interpretation of results, and project implementation were performed independently.
